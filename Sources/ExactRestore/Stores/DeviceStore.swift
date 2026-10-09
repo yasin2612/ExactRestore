@@ -326,7 +326,7 @@ final class DeviceStore {
         return nil
     }
 
-    private var runningCount: Int { jobs.values.filter(\.isRunning).count }
+    var runningCount: Int { jobs.values.filter(\.isRunning).count }
 
     func run(_ kind: JobKind, on ecids: Set<String>, ipsw: URL? = nil) {
         guard let configurator, let employee = kpi.currentEmployee else { return }

@@ -34,13 +34,10 @@ struct ContentView: View {
             }
             Divider()
 
-            if store.devices.isEmpty {
-                ContentUnavailableView(
-                    "No devices connected",
-                    systemImage: "laptopcomputer.and.arrow.down",
-                    description: Text("Cable each target by its DFU port directly to this Mac. Select its port above, then click Enter DFU.")
-                )
-            } else {
+            Group {
+                if store.devices.isEmpty {
+                    EmptyStateGuide(remoteDFU: store.remoteDFUSupported)
+                } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 16) {
                         ForEach(store.devices) { device in
@@ -61,10 +58,15 @@ struct ContentView: View {
                     }
                     .padding(16)
                 }
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider()
+            StatusFooter(store: store)
         }
         .frame(minWidth: 820, minHeight: 500)
-        .overlay(alignment: .bottomTrailing) { Watermark() }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .confirmationDialog(
             eraseTitle(pendingErase),
             isPresented: Binding(get: { pendingErase != nil }, set: { if !$0 { pendingErase = nil } }),
@@ -315,13 +317,104 @@ private struct LogSheet: View {
     }
 }
 
-private struct Watermark: View {
+/// Bottom bar: live station numbers on the left, the watermark on the right.
+private struct StatusFooter: View {
+    let store: DeviceStore
+
+    private var today: EmployeeSummary? {
+        guard let employee = store.kpi.currentEmployee else { return nil }
+        let start = Calendar.current.startOfDay(for: Date())
+        return store.kpi.summary(since: start).first { $0.employee == employee }
+    }
+
     var body: some View {
-        Link(AppInfo.watermark, destination: AppInfo.githubURL)
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .help("Open the developer's GitHub profile")
+        HStack(spacing: 18) {
+            stat("bolt.circle.fill", "\(store.devices.filter { store.mode(for: $0.ecid) == .dfu && store.isConnected($0.ecid) }.count) in DFU", .blue)
+            stat("arrow.triangle.2.circlepath", "\(store.runningCount) running", store.runningCount > 0 ? .orange : .secondary)
+
+            if let employee = store.kpi.currentEmployee {
+                Divider().frame(height: 14)
+                let row = today
+                stat(
+                    "person.crop.circle",
+                    "\(employee) today: \(row?.dfu ?? 0) DFU · \(row?.restores ?? 0) restores · \(row?.revives ?? 0) revives",
+                    .secondary
+                )
+                if let failed = row?.failed, failed > 0 {
+                    stat("exclamationmark.triangle.fill", "\(failed) failed", .red)
+                }
+            }
+
+            Spacer()
+
+            Link(AppInfo.watermark, destination: AppInfo.githubURL)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .help("Open the developer's GitHub profile")
+        }
+        .font(.caption)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private func stat(_ icon: String, _ text: String, _ color: Color) -> some View {
+        Label {
+            Text(text).foregroundStyle(.secondary)
+        } icon: {
+            Image(systemName: icon).foregroundStyle(color)
+        }
+    }
+}
+
+/// Fills the device area when nothing is connected, with the three steps staff need.
+private struct EmptyStateGuide: View {
+    let remoteDFU: Bool
+
+    var body: some View {
+        VStack(spacing: 28) {
+            VStack(spacing: 8) {
+                Image(systemName: "laptopcomputer.and.arrow.down")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.secondary)
+                Text("No Macs in DFU yet").font(.title2.weight(.semibold))
+                Text("Macs appear here once they are in DFU.")
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(alignment: .top, spacing: 16) {
+                step(1, "cable.connector", "Connect",
+                     "Cable each Mac by its DFU port directly to this Mac, using a data cable. No hubs.")
+                step(2, "bolt.horizontal.circle", "Enter DFU",
+                     remoteDFU
+                        ? "Select the orange ports under Host ports, then click Enter DFU."
+                        : "This host cannot send DFU. Put each Mac into DFU with its key combination.")
+                step(3, "arrow.clockwise.circle", "Restore",
+                     "Select the Macs, then click Restore, or drop an .ipsw file on a Mac.")
+            }
+            .frame(maxWidth: 820)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func step(_ number: Int, _ icon: String, _ title: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("\(number)")
+                    .font(.callout.weight(.bold))
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.accentColor.opacity(0.18)))
+                Image(systemName: icon).foregroundStyle(Color.accentColor)
+                Text(title).font(.headline)
+            }
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(.background.secondary))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.2)))
     }
 }
