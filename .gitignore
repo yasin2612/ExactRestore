@@ -1,0 +1,12 @@
+# Build output
+build/
+.build/
+*.xcodeproj/xcuserdata/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Large files that should never be committed
+*.ipsw
+*.dmg
