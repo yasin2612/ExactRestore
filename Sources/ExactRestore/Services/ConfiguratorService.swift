@@ -25,7 +25,8 @@ struct ConfiguratorService {
     private func run(_ command: String, ecid: String, ipsw: URL?, onLine: @escaping @Sendable (String) -> Void) async throws {
         var arguments = ["--ecid", ecid, command]
         if let ipsw { arguments += [Self.ipswOption, ipsw.path] }
-        _ = try await ShellRunner.run(path, arguments, onLine: onLine)
+        // Without this, cfgutil buffers its output when not attached to a terminal and progress only arrives at the end.
+        _ = try await ShellRunner.run(path, arguments, environment: ["NSUnbufferedIO": "YES"], onLine: onLine)
     }
 
     /// Best effort. Macs usually drop off USB after a restore, and then nothing can be read.

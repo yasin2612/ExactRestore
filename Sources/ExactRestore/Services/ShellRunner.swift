@@ -36,6 +36,7 @@ enum ShellRunner {
     static func run(
         _ executable: String,
         _ arguments: [String],
+        environment: [String: String] = [:],
         onLine: (@Sendable (String) -> Void)? = nil
     ) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
@@ -45,6 +46,9 @@ enum ShellRunner {
 
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
+            if !environment.isEmpty {
+                process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
+            }
             process.standardOutput = pipe
             process.standardError = pipe
 

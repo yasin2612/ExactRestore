@@ -333,7 +333,7 @@ final class DeviceStore {
 
         for ecid in ecids where isRunnable(ecid) {
             let startedAt = Date()
-            jobs[ecid] = .running(kind, ipsw.map { "Starting with \($0.lastPathComponent)" } ?? "Starting")
+            jobs[ecid] = .running(kind, JobProgress(line: ipsw.map { "Starting with \($0.lastPathComponent)" } ?? "Starting"))
             AlertService.setDockBadge(runningCount)
             activation[ecid] = nil
             logs[ecid] = []
@@ -443,17 +443,18 @@ final class DeviceStore {
     }
 
     private func updateProgress(ecid: String, kind: JobKind, line: String) {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+        let cleaned = ProgressParser.clean(line)
+        guard !cleaned.isEmpty else { return }
 
         var lines = logs[ecid] ?? []
-        lines.append(trimmed)
+        lines.append(cleaned)
         logs[ecid] = Array(lines.suffix(300))
 
-        if Self.mentionsActivationLock(trimmed) { activation[ecid] = .locked }
+        if Self.mentionsActivationLock(cleaned) { activation[ecid] = .locked }
 
-        guard state(for: ecid).isRunning else { return }
-        jobs[ecid] = .running(kind, trimmed)
+        guard case .running(let runningKind, var progress) = state(for: ecid) else { return }
+        ProgressParser.apply(cleaned, to: &progress)
+        jobs[ecid] = .running(runningKind, progress)
     }
 }
 
