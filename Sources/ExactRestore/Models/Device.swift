@@ -29,7 +29,7 @@ enum PortState: Equatable {
     case connected(maybeCharger: Bool)
     case failed
     case queued
-    case enteringDFU
+    case enteringDFU(attempt: Int)
     case inDFU
 }
 

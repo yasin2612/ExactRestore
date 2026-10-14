@@ -20,6 +20,9 @@ final class DeviceStore {
     /// Port currently being sent DFU, and ports waiting their turn.
     private(set) var currentDFUPort: Int?
     private(set) var dfuQueue: [Int] = []
+    /// Attempt number for the port currently entering DFU.
+    private(set) var dfuAttempt = 1
+    private var stopRequested = false
     private(set) var failedPorts: Set<Int> = []
     /// True only while macvdmtool is running a DFU command, so port listing never overlaps it.
     private var isToolBusy = false
@@ -163,7 +166,7 @@ final class DeviceStore {
     func port(for ecid: String) -> Int? { portForECID[ecid] }
 
     func portState(_ port: HostPort) -> PortState {
-        if currentDFUPort == port.rid { return .enteringDFU }
+        if currentDFUPort == port.rid { return .enteringDFU(attempt: dfuAttempt) }
         if dfuQueue.contains(port.rid) { return .queued }
         switch port.connection {
         case .none, .unreadable:
@@ -200,6 +203,18 @@ final class DeviceStore {
 
     func cancelQueuedPorts() {
         dfuQueue = []
+    }
+
+    /// Stops waiting on the current port. Queued ports continue.
+    func stopCurrentDFU() {
+        guard currentDFUPort != nil else { return }
+        stopRequested = true
+    }
+
+    /// Stops the current port and drops everything queued.
+    func stopAllDFU() {
+        dfuQueue = []
+        stopCurrentDFU()
     }
 
     func refreshPorts() async {
@@ -262,41 +277,85 @@ final class DeviceStore {
         Task { await processDFUQueue() }
     }
 
+    private static let maxDFUAttempts = 3
+    private static let dfuWaitSeconds = 12
+
+    private enum DFUWaitResult {
+        case inDFU(String)
+        case recovery
+        case timeout
+        case stopped
+    }
+
+    private var ecidsInRecovery: Set<String> {
+        connected.filter { modes[$0] == .recovery }
+    }
+
     /// One port at a time so each Mac that appears can be matched to its port.
+    /// A first DFU command sometimes lands the Mac in Recovery; the command is simply sent again.
     private func processDFUQueue() async {
         defer {
             isEnteringDFU = false
             currentDFUPort = nil
+            dfuAttempt = 1
+            stopRequested = false
         }
 
         var problems: [String] = []
         while let dfu, !dfuQueue.isEmpty {
             let rid = dfuQueue.removeFirst()
             currentDFUPort = rid
-            let before = ecidsInDFU
+            stopRequested = false
             let employee = kpi.currentEmployee ?? "Unknown"
             let startedAt = Date()
 
-            do {
-                isToolBusy = true
-                defer { isToolBusy = false }
-                try await dfu.enterDFU(rid: rid)
-            } catch ShellError.failed(_, let output) where HostSetupService.isPasswordError(output) {
-                hostReady = false
-                dfuQueue = []
-                alertMessage = "This Mac needs setup before it can enter DFU. Click Set up this Mac."
-                return
-            } catch {
-                failedPorts.insert(rid)
-                problems.append("\(portName(rid)): \(error.localizedDescription)")
-                kpi.record(KPIEvent(
-                    kind: .dfu, result: .failed, employee: employee, port: portName(rid),
-                    error: error.localizedDescription, startedAt: startedAt
-                ))
+            var foundECID: String?
+            var lastProblem = "Mac did not appear in DFU"
+            var stopped = false
+
+            attempts: for attempt in 1...Self.maxDFUAttempts {
+                dfuAttempt = attempt
+                let dfuBefore = ecidsInDFU
+                let recoveryBefore = ecidsInRecovery
+
+                do {
+                    isToolBusy = true
+                    defer { isToolBusy = false }
+                    try await dfu.enterDFU(rid: rid)
+                } catch ShellError.failed(_, let output) where HostSetupService.isPasswordError(output) {
+                    hostReady = false
+                    dfuQueue = []
+                    alertMessage = "This Mac needs setup before it can enter DFU. Click Set up this Mac."
+                    return
+                } catch {
+                    lastProblem = error.localizedDescription
+                    if stopRequested { stopped = true; break attempts }
+                    try? await Task.sleep(for: .seconds(2))
+                    continue attempts
+                }
+
+                switch await waitForDFU(excludingDFU: dfuBefore, excludingRecovery: recoveryBefore) {
+                case .inDFU(let ecid):
+                    foundECID = ecid
+                    break attempts
+                case .stopped:
+                    stopped = true
+                    break attempts
+                case .recovery:
+                    lastProblem = "Mac went into Recovery instead of DFU"
+                case .timeout:
+                    lastProblem = "Mac did not appear in DFU"
+                }
+            }
+
+            if stopped {
+                // Left as a normal connected port so it can be selected again straight away.
+                failedPorts.remove(rid)
                 continue
             }
 
-            if let ecid = await waitForNewDFU(excluding: before) {
+            if let ecid = foundECID {
+                failedPorts.remove(rid)
                 portForECID[ecid] = rid
                 kpi.record(KPIEvent(
                     kind: .dfu, result: .succeeded, employee: employee, port: portName(rid), ecid: ecid,
@@ -306,9 +365,9 @@ final class DeviceStore {
                 failedPorts.insert(rid)
                 kpi.record(KPIEvent(
                     kind: .dfu, result: .failed, employee: employee, port: portName(rid),
-                    error: "Mac did not appear in DFU", startedAt: startedAt
+                    error: lastProblem, startedAt: startedAt
                 ))
-                problems.append("\(portName(rid)): the Mac got the DFU command but never appeared. Cable it by its DFU port and use a data cable, not a charging cable.")
+                problems.append("\(portName(rid)): \(lastProblem) after \(Self.maxDFUAttempts) attempts. Check it is cabled by its DFU port with a data cable, not a charging cable.")
             }
         }
 
@@ -317,13 +376,18 @@ final class DeviceStore {
         }
     }
 
-    private func waitForNewDFU(excluding before: Set<String>) async -> String? {
-        for _ in 0..<10 {
-            try? await Task.sleep(for: .seconds(2))
+    /// Checks every second so Stop responds at once; refreshes devices every two seconds.
+    private func waitForDFU(excludingDFU dfuBefore: Set<String>, excludingRecovery recoveryBefore: Set<String>) async -> DFUWaitResult {
+        for tick in 1...Self.dfuWaitSeconds {
+            try? await Task.sleep(for: .seconds(1))
+            if stopRequested { return .stopped }
+            guard tick.isMultiple(of: 2) else { continue }
+
             await refresh()
-            if let ecid = ecidsInDFU.subtracting(before).first { return ecid }
+            if let ecid = ecidsInDFU.subtracting(dfuBefore).first { return .inDFU(ecid) }
+            if !ecidsInRecovery.subtracting(recoveryBefore).isEmpty { return .recovery }
         }
-        return nil
+        return .timeout
     }
 
     var runningCount: Int { jobs.values.filter(\.isRunning).count }

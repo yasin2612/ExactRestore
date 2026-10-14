@@ -41,6 +41,10 @@ This produces `build/Exact Restore.zip` with macvdmtool bundled inside.
 * Each DFU, Restore and Revive is recorded with the employee, station, port, model, ECID, result and duration.
 * **KPIs** in the header shows totals for this station (today, 7 days, 30 days) and exports CSV.
 
+### Google Sheets (recommended)
+
+`integrations/google-sheets/` contains an Apps Script that turns a Google Sheet into the central KPI store for every station, with a JSON endpoint for websites. Follow its README.
+
 ### KPI API contract
 
 Set the URL and key in **Settings > KPI sync**. The app sends batches of up to 100 events:

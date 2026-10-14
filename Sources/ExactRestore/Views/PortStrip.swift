@@ -44,9 +44,20 @@ struct PortStrip: View {
                 }
             }
 
+            if store.currentDFUPort != nil {
+                Button {
+                    store.stopCurrentDFU()
+                } label: {
+                    Label("Stop", systemImage: "stop.circle.fill")
+                }
+                .tint(.red)
+                .buttonStyle(.borderedProminent)
+                .help("Stop waiting on the port entering DFU. You can select it again right away")
+            }
+
             if !store.dfuQueue.isEmpty {
-                Button("Cancel queued") { store.cancelQueuedPorts() }
-                    .help("Stop ports that are still waiting their turn")
+                Button("Stop all") { store.stopAllDFU() }
+                    .help("Stop the current port and drop every queued port")
             }
 
             Button("Select waiting") { store.selectWaitingPorts() }
@@ -142,7 +153,7 @@ private struct PortChip: View {
         case .connected(let maybeCharger): maybeCharger ? "Connected, may be a charger" : "Not in DFU"
         case .failed: "DFU failed, select to retry"
         case .queued: "Queued"
-        case .enteringDFU: "Entering DFU…"
+        case .enteringDFU(let attempt): attempt > 1 ? "Entering DFU, try \(attempt)…" : "Entering DFU…"
         case .inDFU: "In DFU"
         }
     }

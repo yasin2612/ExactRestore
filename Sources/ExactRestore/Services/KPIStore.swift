@@ -161,10 +161,14 @@ final class KPIStore {
 
             do {
                 request.httpBody = try encoder.encode(UploadBody(station: KPIEvent.stationName, events: batch))
-                let (_, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await URLSession.shared.data(for: request)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 guard (200..<300).contains(status) else {
                     lastUploadError = "Server answered \(status)"
+                    return
+                }
+                if let problem = Self.rejection(in: data, url: url) {
+                    lastUploadError = problem
                     return
                 }
             } catch {
@@ -179,6 +183,17 @@ final class KPIStore {
             lastUploadError = nil
             lastUploadAt = Date()
         }
+    }
+
+    /// Google Apps Script answers 200 even when the script fails, so a JSON `ok` flag is required there.
+    /// Other servers may answer with an empty body; a JSON `ok: false` is still respected.
+    private static func rejection(in data: Data, url: URL) -> String? {
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        if let ok = json?["ok"] as? Bool {
+            return ok ? nil : (json?["error"] as? String ?? "Server rejected the batch")
+        }
+        let isAppsScript = url.host?.contains("script.google") == true || url.host?.contains("googleusercontent") == true
+        return isAppsScript ? "Google Sheets did not confirm the batch. Check the web app deployment." : nil
     }
 
     private struct UploadBody: Encodable {

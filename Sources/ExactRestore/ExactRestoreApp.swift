@@ -116,6 +116,10 @@ private struct SyncSettings: View {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
 
+            Text("For Google Sheets, paste the web app URL with ?key=YOUR_KEY at the end and leave API key empty. See integrations/google-sheets/README.md.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Text("Events are stored on this Mac and sent in batches. Nothing is lost while the API is offline or not set up yet.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
